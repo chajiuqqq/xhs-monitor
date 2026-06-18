@@ -1,0 +1,10 @@
+[Unit]
+Description=XiaoHongShu Monitor - Pipeline Timer (every 6h)
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=6h
+AccuracySec=1min
+
+[Install]
+WantedBy=timers.target

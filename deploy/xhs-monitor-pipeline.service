@@ -1,0 +1,16 @@
+[Unit]
+Description=XiaoHongShu Monitor - Pipeline (Search + Push)
+
+[Service]
+Type=oneshot
+WorkingDirectory=/home/dev/xhs_monitor
+Environment=PATH=/home/dev/.npm-global/bin:/home/dev/.local/bin:/usr/local/bin:/usr/bin:/bin
+Environment=PYTHONUTF8=1
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/usr/bin/python3 /home/dev/xhs_monitor/manage.py run
+StandardOutput=journal
+StandardError=journal
+TimeoutStartSec=900
+
+[Install]
+WantedBy=multi-user.target
