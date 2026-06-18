@@ -1,0 +1,39 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+env/
+.venv/
+
+# 敏感凭证（不入库）
+.env
+cookies/
+
+# 数据和缓存
+db/*.db
+output/
+browsers/
+*.log
+
+# Claude Code 会话状态（不入库）
+.claude/
+
+# 临时文件
+*.tmp
+*.bak
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# 系统 systemd 配置（仅在远程机器上存在，不入代码库）
+deploy/systemd/
+
+# workbuddy 本地工作区
+.workbuddy/

@@ -1,0 +1,19 @@
+{
+  "keywords": [],
+  "tasks": [
+    {
+      "name": "fengxian_dating_female",
+      "description": "上海奉贤的相亲交友脱单贴，地区限定奉贤，年龄97-02之间，贴主需要性别女",
+      "keywords": [
+        "奉贤相亲",
+        "上海脱单",
+        "交友贴",
+        "奉贤女生",
+        "脱单"
+      ],
+      "filter": "地区限定上海奉贤；贴主性别女；年龄在97-02年之间；不含广告/推广/婚介所"
+    }
+  ],
+  "max_per_keyword": 10,
+  "push_user_id": ""
+}
