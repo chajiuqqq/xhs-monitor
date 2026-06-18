@@ -64,6 +64,23 @@ def _build_subprocess_env() -> dict:
         ]
         # 保留原 PATH 前缀，再加上补充路径
         env["PATH"] = ":".join(extra_paths) + ":" + env.get("PATH", "")
+
+        # LD_LIBRARY_PATH：paddlepaddle-gpu (cu11.8) dlopen 需要 cuDNN/cuBLAS/nvrtc/cudart
+        # 这些库以 pip wheel 安装，必须在进程启动前由 ld.so 读取（python 内 os.environ 改动无效）
+        site = str(Path.home() / ".local" / "lib" / "python3.12" / "site-packages")
+        cuda_lib_dirs = [
+            str(Path.home() / ".local" / "cudnn8" / "lib"),  # cudnn 8.6（含无版本号软链）
+            f"{site}/nvidia/cublas/lib",
+            f"{site}/nvidia/cuda_nvrtc/lib",
+            f"{site}/nvidia/cuda_runtime/lib",
+            f"{site}/nvidia/cudnn/lib",
+        ]
+        existing_ld = env.get("LD_LIBRARY_PATH", "")
+        existing_parts = existing_ld.split(":") if existing_ld else []
+        new_parts = [p for p in cuda_lib_dirs if p not in existing_parts]
+        if new_parts:
+            env["LD_LIBRARY_PATH"] = ":".join(new_parts + existing_parts)
+
     env["PYTHONUTF8"] = "1"
     env["PYTHONUNBUFFERED"] = "1"
     return env
@@ -224,6 +241,14 @@ def cmd_config(args):
 
 def cmd_run(args):
     """立即执行监控 pipeline 并推送结果。"""
+    import os
+
+    # env var 兜底：XHS_NO_OCR=1 / XHS_NO_SUMMARY=1（bot 触发场景用）
+    if not args.no_ocr and os.getenv("XHS_NO_OCR") == "1":
+        args.no_ocr = True
+    if not args.no_summary and os.getenv("XHS_NO_SUMMARY") == "1":
+        args.no_summary = True
+
     tasks = load_tasks()
     keywords = tasks.get("keywords", [])
     task_list = tasks.get("tasks", [])
@@ -262,6 +287,10 @@ def cmd_run(args):
     pipeline_cmd = [PYTHON, pipeline_script, kw_json, "--max", str(max_results)]
     if args.no_llm:
         pipeline_cmd.append("--no-llm")
+    if args.no_ocr:
+        pipeline_cmd.append("--no-ocr")
+    if args.no_summary:
+        pipeline_cmd.append("--no-summary")
     if task_list:
         # 把任务组写入临时 JSON 文件传给 pipeline（避免命令行长度问题）
         tmp = PROJECT_ROOT / "output" / "_pipeline_tasks.json"
@@ -542,6 +571,8 @@ def main():
     p_run.add_argument("--dry-run", action="store_true", help="仅预览推送内容不发送")
     p_run.add_argument("--force-push", action="store_true", help="即使无新帖也推送")
     p_run.add_argument("--no-llm", action="store_true", help="强制跳过 LLM 过滤")
+    p_run.add_argument("--no-ocr", action="store_true", help="跳过图片 OCR")
+    p_run.add_argument("--no-summary", action="store_true", help="跳过 LLM 摘要")
 
     # status
     sub.add_parser("status", help="查看运行统计")

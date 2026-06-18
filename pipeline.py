@@ -28,7 +28,14 @@ if sys.platform == "win32":
 sys.path.insert(0, str(Path(__file__).parent))
 
 import llm
-from config import LLM_ENABLED, MAX_RESULTS_DEFAULT, OUTPUT_DIR
+import ocr
+from config import (
+    LLM_ENABLED,
+    MAX_RESULTS_DEFAULT,
+    OCR_SKIP_DESC_THRESHOLD,
+    OCR_SKIP_IMAGES_THRESHOLD,
+    OUTPUT_DIR,
+)
 from content_parser import parse_note_from_detail
 from dedup import (
     filter_new_notes,
@@ -56,6 +63,8 @@ def _build_push_note(note: dict, keyword_label: str) -> dict:
         "image_count": len(note.get("image_urls", [])),
         "image_urls": note.get("image_urls", []),
         "llm_match_reason": note.get("llm_match_reason", ""),
+        "ocr_text": note.get("ocr_text", ""),
+        "summary": note.get("summary", ""),
     }
 
 
@@ -65,32 +74,69 @@ def _process_notes(
     *,
     use_llm_filter: bool,
     llm_criteria: str,
+    use_ocr: bool = True,
+    use_summary: bool = True,
     use_llm: bool = True,
 ) -> tuple[list[dict], dict]:
     """
-    处理一批新帖子：解析 + 内容去重 + (LLM 过滤) + 标记 seen。
+    处理一批新帖子：OCR 增强 → 解析 → 内容去重 → (LLM 过滤) → 标记 seen。
 
     Args:
         notes: filter_new_notes() 的输出
         keyword_label: 写入 DB 的 keyword 字段（keywords 路径用 kw 本身，tasks 路径用 task.name）
         use_llm_filter: 是否启用 LLM 二次过滤
         llm_criteria: 过滤条件（仅 use_llm_filter=True 时有效）
+        use_ocr: 是否对含图帖子跑 OCR
+        use_summary: 是否调用 LLM 生成摘要（实际由 run_pipeline 末尾统一跑）
         use_llm: 全局开关（pipeline --no-llm 时为 False）
 
     Returns:
         (推送用 notes 列表, 统计 dict)
     """
     push_notes: list[dict] = []
-    stat = {"searched": len(notes), "new": 0, "dup_content": 0, "filtered_by_llm": 0}
+    stat = {
+        "searched": len(notes),
+        "new": 0,
+        "dup_content": 0,
+        "filtered_by_llm": 0,
+        "ocr_skipped": 0,  # 智能跳过的帖子数
+    }
 
-    # 1) 解析 + 内容指纹去重（状态直接落库）
+    # 1) OCR 增强（仅对含图帖子，OCR 文本写入 combined_desc）
+    for note in notes:
+        if use_ocr and note.get("image_urls"):
+            desc_len = len(note.get("desc") or "")
+            img_count = len(note["image_urls"])
+            # 智能跳过：高密度文字帖 + 多图
+            if (
+                desc_len > OCR_SKIP_DESC_THRESHOLD
+                and img_count > OCR_SKIP_IMAGES_THRESHOLD
+            ):
+                note["combined_desc"] = note.get("desc", "")
+                stat["ocr_skipped"] += 1
+            else:
+                ocr_text = ocr.ocr_images(note["image_urls"])
+                note["ocr_text"] = ocr_text
+                if ocr_text:
+                    note["combined_desc"] = (
+                        (note.get("desc") or "") + "\n\n[图片文字]\n" + ocr_text
+                    )
+                else:
+                    note["combined_desc"] = note.get("desc", "")
+        else:
+            note["combined_desc"] = note.get("desc", "")
+
+    def _content() -> str:
+        return note.get("combined_desc") or note.get("desc", "")
+
+    # 2) 解析 + 内容指纹去重（状态直接落库；content 用 combined_desc）
     parsed: list[dict] = []
     for note in notes:
         try:
             detail = parse_note_from_detail(note["note_id"], note.get("detail", {}))
             note.update(detail)
 
-            if is_content_duplicate(note.get("desc", "")):
+            if is_content_duplicate(_content()):
                 stat["dup_content"] += 1
                 mark_seen(
                     note_id=note["note_id"],
@@ -98,7 +144,7 @@ def _process_notes(
                     title=note.get("title", ""),
                     author=note.get("author", ""),
                     likes=note.get("likes", 0),
-                    content=note.get("desc", ""),
+                    content=_content(),
                     status="dup_content",
                 )
                 continue
@@ -110,7 +156,7 @@ def _process_notes(
                 title=note.get("title", ""),
                 author=note.get("author", ""),
                 likes=note.get("likes", 0),
-                content=note.get("desc", ""),
+                content=_content(),
                 status="new_llm_pending" if use_llm_filter else "new",
             )
             parsed.append(note)
@@ -118,7 +164,7 @@ def _process_notes(
             print(f"  [错误] 解析失败 {note['note_id']}: {e}")
             mark_seen(note_id=note["note_id"], keyword=keyword_label, status="parse_error")
 
-    # 2) LLM 过滤
+    # 3) LLM 过滤
     if use_llm_filter and parsed:
         matched = llm.filter_posts(parsed, llm_criteria, use_llm=use_llm)
         matched_ids = {p["note_id"] for p in matched}
@@ -132,7 +178,7 @@ def _process_notes(
                     title=note.get("title", ""),
                     author=note.get("author", ""),
                     likes=note.get("likes", 0),
-                    content=note.get("desc", ""),
+                    content=_content(),
                     status="new",
                 )
                 push_notes.append(_build_push_note(note, keyword_label))
@@ -145,7 +191,7 @@ def _process_notes(
                     title=note.get("title", ""),
                     author=note.get("author", ""),
                     likes=note.get("likes", 0),
-                    content=note.get("desc", ""),
+                    content=_content(),
                     status="filtered_by_llm",
                 )
                 stat["filtered_by_llm"] += 1
@@ -165,6 +211,8 @@ def run_pipeline(
     tasks: list[dict] | None = None,
     max_results: int = MAX_RESULTS_DEFAULT,
     use_llm: bool = True,
+    use_ocr: bool = True,
+    use_summary: bool = True,
 ) -> dict:
     """
     执行完整监控 pipeline（关键词路径 + 任务组路径并行）。
@@ -174,12 +222,13 @@ def run_pipeline(
         tasks: 新版任务组列表，每项 {name, description, keywords, filter}
         max_results: 每个搜索词最大抓取数
         use_llm: 是否启用 LLM 过滤（pipeline --no-llm 时为 False）
+        use_ocr: 是否对含图帖子跑 OCR（pipeline --no-ocr 时为 False）
+        use_summary: 是否生成 LLM 摘要（pipeline --no-summary 时为 False）
 
     Returns:
         {
             "new_notes": [...],
-            "stats": {"total_searched", "total_new", "total_dup_content",
-                      "total_filtered_by_llm", "by_keyword", "by_task"},
+            "stats": {...},
             "timestamp": "...",
         }
     """
@@ -194,6 +243,8 @@ def run_pipeline(
         "total_new": 0,
         "total_dup_content": 0,
         "total_filtered_by_llm": 0,
+        "total_ocr_skipped": 0,
+        "total_summary_generated": 0,
         "by_keyword": {},
         "by_task": {},
     }
@@ -210,12 +261,14 @@ def run_pipeline(
                 keyword,
                 use_llm_filter=False,
                 llm_criteria="",
+                use_ocr=use_ocr,
                 use_llm=use_llm,
             )
             all_new_notes.extend(push_notes)
             stats["total_searched"] += kw_stat["searched"]
             stats["total_new"] += kw_stat["new"]
             stats["total_dup_content"] += kw_stat["dup_content"]
+            stats["total_ocr_skipped"] += kw_stat.get("ocr_skipped", 0)
             stats["by_keyword"][keyword] = kw_stat
 
     # ── 路径 B：新版 tasks（带 LLM 过滤） ──
@@ -252,6 +305,7 @@ def run_pipeline(
                 task_name,
                 use_llm_filter=use_filter,
                 llm_criteria=task_filter,
+                use_ocr=use_ocr,
                 use_llm=use_llm,
             )
             all_new_notes.extend(push_notes)
@@ -259,7 +313,22 @@ def run_pipeline(
             stats["total_new"] += task_stat["new"]
             stats["total_dup_content"] += task_stat["dup_content"]
             stats["total_filtered_by_llm"] += task_stat["filtered_by_llm"]
+            stats["total_ocr_skipped"] += task_stat.get("ocr_skipped", 0)
             stats["by_task"][task_name] = task_stat
+
+    # ── 批量 LLM 摘要（仅对 push_notes；OCR 之前已跑过）──
+    if all_new_notes and use_summary and LLM_ENABLED and use_llm:
+        summaries = llm.summarize_posts(all_new_notes, use_llm=use_llm)
+        for note in all_new_notes:
+            if note["note_id"] in summaries:
+                note["summary"] = summaries[note["note_id"]]
+                # 回写 DB（summary 字段）
+                mark_seen(
+                    note_id=note["note_id"],
+                    keyword=note.get("keyword", ""),
+                    summary=summaries[note["note_id"]],
+                )
+        stats["total_summary_generated"] = len(summaries)
 
     result = {
         "new_notes": all_new_notes,
@@ -298,6 +367,16 @@ def main():
         help="强制跳过 LLM 过滤（仅走关键词命中 + 内容去重）",
     )
     parser.add_argument(
+        "--no-ocr",
+        action="store_true",
+        help="跳过图片 OCR（依赖未装或主动禁用时用）",
+    )
+    parser.add_argument(
+        "--no-summary",
+        action="store_true",
+        help="跳过 LLM 摘要（监控简报用 desc 截断）",
+    )
+    parser.add_argument(
         "--tasks-json",
         type=str,
         default="",
@@ -319,12 +398,16 @@ def main():
     print(f"[启动] 任务组: {[t.get('name', '?') for t in tasks]}")
     print(f"[配置] 每词最大: {args.max}")
     print(f"[配置] LLM 过滤: {'关闭' if args.no_llm else '开启' if LLM_ENABLED else '未配置'}")
+    print(f"[配置] OCR: {'关闭' if args.no_ocr else '开启'}")
+    print(f"[配置] LLM 摘要: {'关闭' if args.no_summary else '开启' if LLM_ENABLED else '未配置'}")
 
     result = run_pipeline(
         keywords=keywords,
         tasks=tasks,
         max_results=args.max,
         use_llm=not args.no_llm,
+        use_ocr=not args.no_ocr,
+        use_summary=not args.no_summary,
     )
 
     print(f"\n{'='*50}")
@@ -333,6 +416,10 @@ def main():
     print(f"[完成] 内容重复: {result['stats']['total_dup_content']} 篇")
     if result['stats']['total_filtered_by_llm']:
         print(f"[完成] LLM 过滤: {result['stats']['total_filtered_by_llm']} 篇")
+    if result['stats'].get('total_ocr_skipped'):
+        print(f"[完成] OCR 跳过: {result['stats']['total_ocr_skipped']} 篇")
+    if result['stats'].get('total_summary_generated'):
+        print(f"[完成] LLM 摘要: {result['stats']['total_summary_generated']} 篇")
     print(f"[输出] {OUTPUT_DIR / 'latest_result.json'}")
 
 

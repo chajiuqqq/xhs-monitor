@@ -76,3 +76,13 @@ LLM_BASE_URL = os.getenv("XHS_LLM_BASE_URL", "https://api.deepseek.com/v1")
 LLM_MODEL = os.getenv("XHS_LLM_MODEL", "deepseek-chat")
 LLM_API_KEY = os.getenv("XHS_LLM_API_KEY") or os.getenv("OPENAI_API_KEY") or ""
 LLM_ENABLED = bool(LLM_API_KEY)  # 未配置 API key 时跳过 LLM 过滤（降级）
+
+# ── OCR 配置（本地 PaddleOCR，可选）────────────────────
+# GPU 自动检测（paddle.device.is_compiled_with_cuda）；无 paddleocr 模块时降级跳过
+OCR_MAX_IMAGES_PER_NOTE = 3           # 每帖最多 OCR 几张图
+OCR_REQUEST_TIMEOUT_S = 10            # 单图下载/OCR 超时（秒）
+OCR_LANG = "ch"                       # PaddleOCR 语言模型（"ch"=中英混合）
+OCR_MAX_IMAGE_BYTES = 10 * 1024 * 1024  # 单图大于 10MB 直接跳过（防 OOM）
+OCR_SKIP_DESC_THRESHOLD = 200         # desc 长度超过此值 + 图多则跳过 OCR
+OCR_SKIP_IMAGES_THRESHOLD = 3         # image_urls 数量阈值（与 desc 配合）
+OCR_DOWNLOAD_WORKERS = 4              # 并行下载线程数

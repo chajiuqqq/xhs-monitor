@@ -27,9 +27,15 @@ def init_db() -> None:
             first_seen     TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             last_checked   TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             content_hash   TEXT,
+            summary        TEXT,
             status         TEXT DEFAULT 'new'
         )
     """)
+    # 旧库兼容：补加 summary 列（已存在则忽略）
+    try:
+        conn.execute("ALTER TABLE seen_notes ADD COLUMN summary TEXT")
+    except sqlite3.OperationalError:
+        pass  # 列已存在
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_content_hash ON seen_notes(content_hash)"
     )
@@ -75,6 +81,7 @@ def mark_seen(
     likes: int = 0,
     content: str = "",
     status: str = "new",
+    summary: str = "",
 ) -> None:
     """记录一条已抓取帖子（存在则更新）。"""
     content_hash = (
@@ -87,16 +94,18 @@ def mark_seen(
     conn.execute(
         """
         INSERT INTO seen_notes
-            (note_id, keyword, title, author, likes, first_seen, last_checked, content_hash, status)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            (note_id, keyword, title, author, likes, first_seen, last_checked,
+             content_hash, summary, status)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(note_id) DO UPDATE SET
             last_checked = excluded.last_checked,
             title        = excluded.title,
             likes        = excluded.likes,
             content_hash = excluded.content_hash,
+            summary      = excluded.summary,
             status       = excluded.status
         """,
-        (note_id, keyword, title, author, likes, now, now, content_hash, status),
+        (note_id, keyword, title, author, likes, now, now, content_hash, summary, status),
     )
     conn.commit()
     conn.close()

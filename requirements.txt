@@ -1,3 +1,15 @@
 playwright>=1.40.0
 requests>=2.28.0
 openai>=1.40.0
+
+# 可选：图片 OCR（GPU 加速，需 NVIDIA 显卡）
+# 部署机有 RTX 4070，安装 paddlepaddle-gpu 自带 CUDA runtime，无需另装 CUDA toolkit
+# 清华源 wheel（中国大陆稳定）：
+#   pip install paddlepaddle-gpu paddleocr Pillow numpy -i https://pypi.tuna.tsinghua.edu.cn/simple
+# 验证 GPU：
+#   python -c "import paddle; print(paddle.device.is_compiled_with_cuda())"  # 应输出 True
+#
+# paddlepaddle-gpu>=3.0.0
+# paddleocr>=2.7.0
+# numpy>=1.24.0
+# Pillow>=10.0.0

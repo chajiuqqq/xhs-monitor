@@ -45,6 +45,12 @@ _FILTER_SYSTEM = """你是小红书帖子筛选助手。给定一个用户筛选
 - 信息不足（无 desc）时保守返回 match=false
 - 只返回 JSON 数组"""
 
+_SUMMARY_SYSTEM = """你是小红书帖子摘要助手。给定一组帖子（每条含 title 和 desc，其中 desc 可能含 [图片文字] 段落——是 OCR 从图片中提取的文本），
+为每条生成 1-2 句中文摘要（≤60 字）。
+突出关键信息：主题、地点、价格、要求、时间、联系方式。
+返回严格 JSON 数组：[{"note_id": "...", "summary": "..."}]
+只返回 JSON 数组，不要 markdown 包装。"""
+
 
 # ── 客户端 ────────────────────────────────────────────────
 
@@ -175,11 +181,12 @@ def filter_posts(posts: list[dict], criteria: str, *, use_llm: bool = True) -> l
         return list(posts)
 
     # 精简输入，控制 token
+    # 优先用 combined_desc（含 OCR 文本），fallback 到 desc
     slim = [
         {
             "note_id": p.get("note_id", ""),
             "title": (p.get("title") or "")[:80],
-            "desc": (p.get("desc") or "")[:300],
+            "desc": (p.get("combined_desc") or p.get("desc") or "")[:600],
             "likes": p.get("likes", 0),
         }
         for p in posts
@@ -221,3 +228,48 @@ def filter_posts(posts: list[dict], criteria: str, *, use_llm: bool = True) -> l
         matched.append(post_out)
 
     return matched
+
+
+def summarize_posts(notes: list[dict], *, use_llm: bool = True, chunk_size: int = 20) -> dict[str, str]:
+    """
+    批量生成帖子摘要（1 次 API 调用处理一批，最多 chunk_size 条）。
+
+    Args:
+        notes: 帖子列表，每项至少含 note_id, title, desc（或 combined_desc）
+        use_llm: False 时跳过（降级用）
+        chunk_size: 每批最多多少条（>chunk_size 自动分多次调用）
+
+    Returns:
+        {note_id: summary}  命中的摘要。失败/未启用 → {}
+    """
+    if not notes or not use_llm or not LLM_ENABLED:
+        return {}
+
+    out: dict[str, str] = {}
+
+    def _one_batch(batch: list[dict]) -> dict[str, str]:
+        slim = [
+            {
+                "note_id": n.get("note_id", ""),
+                "title": (n.get("title") or "")[:80],
+                "desc": (n.get("combined_desc") or n.get("desc") or "")[:600],
+            }
+            for n in batch
+        ]
+        messages = [
+            {"role": "system", "content": _SUMMARY_SYSTEM},
+            {"role": "user", "content": f"帖子列表（共 {len(slim)} 条）:\n{json.dumps(slim, ensure_ascii=False)}"},
+        ]
+        result = _chat_json(messages, max_retries=1)
+        if not isinstance(result, list):
+            print("  [LLM 摘要] 降级：返回空（push 用 desc 截断）", file=sys.stderr)
+            return {}
+        return {
+            r.get("note_id", ""): (r.get("summary") or "")[:80]
+            for r in result
+            if isinstance(r, dict) and r.get("note_id")
+        }
+
+    for i in range(0, len(notes), chunk_size):
+        out.update(_one_batch(notes[i : i + chunk_size]))
+    return out

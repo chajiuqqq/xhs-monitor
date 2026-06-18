@@ -15,8 +15,9 @@ xhs_monitor/
 ├── bot.py                 # 飞书 Bot（命令处理 + 事件监听）
 ├── config.py              # 全局配置（路径/选择器/浏览器/LLM 端点）
 ├── content_parser.py      # SSR 数据 → 结构化字段
+├── ocr.py                 # 图片 OCR（PaddleOCR GPU 加速，含 OCR 文本增强 LLM 输入）
 ├── dedup.py               # SQLite 双层去重
-├── llm.py                 # LLM 能力封装（decompose_task + filter_posts）
+├── llm.py                 # LLM 能力封装（decompose_task + filter_posts + summarize_posts）
 ├── manage.py              # CLI 任务管理（list/add/remove/run/status/task）
 ├── pipeline.py            # 主流程编排（关键词路径 + 任务组路径）
 ├── push_feishu.py         # 飞书推送（Markdown 渲染 + LLM 匹配理由）
@@ -93,6 +94,45 @@ xhs_monitor/
 - `keywords[]`：老路径，仅按关键词命中推送（无 LLM 过滤）
 - `tasks[]`：新路径，LLM 拆解 + 帖子级 LLM 二次过滤
 - pipeline 一次执行同时遍历两组
+
+## 图片 OCR（可选）
+
+`ocr.py` 基于本地 PaddleOCR GPU 加速，将帖子图片文字提取后拼入 LLM 过滤输入（`combined_desc`），让截图型招聘/通知等"图里有字但 desc 短"的帖子能被 LLM 正确判定。
+
+**部署要求**：需 NVIDIA 显卡 + paddlepaddle-gpu + cuDNN 8.6。详见 [ocr.py](ocr.py) 顶部注释。
+
+```bash
+# 安装 OCR 依赖（清华源）
+pip install paddlepaddle-gpu==2.6.2 "paddleocr<3.0.0" \
+    "nvidia-cudnn-cu11==8.6.0.163" nvidia-cublas-cu11 \
+    nvidia-cuda-nvrtc-cu11 nvidia-cuda-runtime-cu11 Pillow numpy \
+    -i https://pypi.tuna.tsinghua.edu.cn/simple
+
+# 手动配置 cuDNN 8.6 无版本号软链（OCR 无法加载 cuDNN 时执行一次）
+mkdir -p ~/.local/cudnn8/lib
+pip download "nvidia-cudnn-cu11==8.6.0.163" --no-deps -d /tmp/cd \
+    -i https://pypi.tuna.tsinghua.edu.cn/simple
+unzip -j /tmp/cd/nvidia_cudnn_cu11-8.6.0.163-*.whl "nvidia/cudnn/lib/*" -d ~/.local/cudnn8/lib
+ln -sf libcudnn.so.8 ~/.local/cudnn8/lib/libcudnn.so
+ln -sf libcublas.so.11 ~/.local/lib/python3.12/site-packages/nvidia/cublas/lib/libcublas.so
+ln -sf libcublasLt.so.11 ~/.local/lib/python3.12/site-packages/nvidia/cublas/lib/libcublasLt.so
+```
+
+**开关**：
+- `manage.py run --no-ocr` — 临时跳过 OCR
+- `XHS_NO_OCR=1` 环境变量 — Bot 触发时跳过
+- 依赖缺失时自动降级，不中断 pipeline
+
+**智能跳过**：帖子 `desc` > 200 字且 `image_urls` > 3 张时自动跳过（高密度文字帖 OCR 信号弱）。
+
+## LLM 摘要
+
+`llm.summarize_posts()` 在推送前为每条命中帖子生成 1-2 句中文摘要（≤60 字），替代原来的 `desc[:200]` 截断。每 20 条帖子一次 API 调用。
+
+**开关**：
+- `manage.py run --no-summary` — 临时跳过摘要
+- `XHS_NO_SUMMARY=1` 环境变量 — Bot 触发时跳过
+- LLM 未配置时自动降级，推送用 `desc` 截断
 
 ## LLM 配置
 

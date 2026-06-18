@@ -7,6 +7,7 @@ WorkingDirectory=/home/dev/xhs_monitor
 Environment=PATH=/home/dev/.npm-global/bin:/home/dev/.local/bin:/usr/local/bin:/usr/bin:/bin
 Environment=PYTHONUTF8=1
 Environment=PYTHONUNBUFFERED=1
+Environment=LD_LIBRARY_PATH=/home/dev/.local/cudnn8/lib:/home/dev/.local/lib/python3.12/site-packages/nvidia/cublas/lib:/home/dev/.local/lib/python3.12/site-packages/nvidia/cuda_nvrtc/lib:/home/dev/.local/lib/python3.12/site-packages/nvidia/cuda_runtime/lib
 ExecStart=/usr/bin/python3 /home/dev/xhs_monitor/manage.py run
 StandardOutput=journal
 StandardError=journal

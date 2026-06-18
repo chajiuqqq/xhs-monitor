@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 # 小红书监控工程
 
-LLM 驱动的小红书帖子监控系统：飞书 Bot 管理关键词 → Playwright 搜索 → SQLite 去重 → SSR 数据解析 → 飞书推送。
+LLM 驱动的小红书帖子监控系统：飞书 Bot 管理关键词 → Playwright 搜索 → SQLite 去重 → 图片 OCR 增强 → SSR 数据解析 → LLM 二次过滤 + 摘要 → 飞书推送。
 
 ## 常用命令
 
@@ -22,6 +22,8 @@ python manage.py run --task agent_jd_30w           # 只跑该任务组
 python manage.py run --dry-run                     # 仅预览不实际推送
 python manage.py run --force-push                  # 无新帖也推送
 python manage.py run --no-llm                      # 强制跳过 LLM 过滤
+python manage.py run --no-ocr                      # 跳过图片 OCR
+python manage.py run --no-summary                  # 跳过 LLM 摘要
 python manage.py task list                         # 查看所有任务组
 python manage.py task show <name>                  # 任务组详情
 python manage.py task remove <name>                # 删除任务组
@@ -64,16 +66,17 @@ journalctl --user -u xhs-monitor-bot.service -f    # 实时日志
 
 ## 架构总览
 
-六个关键节点（详见 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)）：
+七个关键节点（详见 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)）：
 
 1. **任务配置** — `tasks.json` 双轨并存：`keywords[]`（老路径，无 LLM 过滤）+ `tasks[]`（新路径，LLM 拆解 + 智能过滤）；飞书 Bot 命令（`/add`、`/task`）直接读写
 2. **LLM 拆解** — `llm.py` 用 DeepSeek/openai 兼容端点，自然语言需求 → {name, keywords, filter}
 3. **小红书搜索** — `searcher.py` 单浏览器实例，搜索 + 详情一体化（避免反复启动）
-4. **增量去重** — `dedup.py` SQLite 双层去重：noteId 主键 + content_hash 内容指纹
-5. **内容解析** — `content_parser.py` 从 Playwright 提取的 SSR 结构化数据（`window.__INITIAL_STATE__.note.noteDetailMap[noteId]`）整理字段
-6. **LLM 二次过滤 + 飞书推送** — `llm.filter_posts()` 按 task.filter 二次筛选 → `push_feishu.py` 用 `lark-cli im +messages-send --as bot` 发送 Markdown 简报
+4. **图片 OCR 增强** — `ocr.py` 用本地 PaddleOCR GPU 加速提取帖子图片文字，拼入 `combined_desc` 供 LLM 过滤和内容去重使用
+5. **增量去重** — `dedup.py` SQLite 双层去重：noteId 主键 + content_hash 内容指纹
+6. **内容解析** — `content_parser.py` 从 Playwright 提取的 SSR 结构化数据（`window.__INITIAL_STATE__.note.noteDetailMap[noteId]`）整理字段
+7. **LLM 二次过滤 + 摘要 + 飞书推送** — `llm.filter_posts()` 按 task.filter 二次筛选 → `llm.summarize_posts()` 生成 1-2 句摘要 → `push_feishu.py` 用 `lark-cli im +messages-send --as bot` 发送 Markdown 简报
 
-数据流：飞书 Bot 命令 → tasks.json → pipeline（搜索→去重→解析→LLM 过滤）→ `output/latest_result.json` → push_feishu → 飞书 P2P 私聊
+数据流：飞书 Bot 命令 → tasks.json → pipeline（搜索→去重→OCR 增强→解析→LLM 过滤→LLM 摘要）→ `output/latest_result.json` → push_feishu → 飞书 P2P 私聊
 
 ## 关键模块职责
 
@@ -84,8 +87,9 @@ journalctl --user -u xhs-monitor-bot.service -f    # 实时日志
 | [pipeline.py](pipeline.py) | 主流程编排：双路径（keywords 走 A，tasks 走 B+LLM）→ 搜索→去重→解析→(LLM 过滤)→ 写 `output/latest_result.json` |
 | [searcher.py](searcher.py) | Playwright 搜索结果页 + 详情页（单浏览器实例、SSR 解析） |
 | [content_parser.py](content_parser.py) | SSR 数据 → 结构化字段（title/desc/tags/imageList/video） |
-| [dedup.py](dedup.py) | SQLite 表 `seen_notes`（noteId PRIMARY KEY + content_hash 索引；status 支持 new/new_llm_pending/filtered_by_llm/dup_content/parse_error） |
-| [llm.py](llm.py) | OpenAI 兼容 LLM 封装：`decompose_task(description)` → {name, keywords, filter}；`filter_posts(posts, criteria)` → 命中帖子；异常降级返回原列表 |
+| [dedup.py](dedup.py) | SQLite 表 `seen_notes`（noteId PRIMARY KEY + content_hash 索引；status 支持 new/new_llm_pending/filtered_by_llm/dup_content/parse_error；summary 列存 LLM 摘要） |
+| [llm.py](llm.py) | OpenAI 兼容 LLM 封装：`decompose_task(description)` → {name, keywords, filter}；`filter_posts(posts, criteria)` → 命中帖子（输入优先用 combined_desc）；`summarize_posts()` → 批量生成 1-2 句中文摘要；异常降级返回原列表 |
+| [ocr.py](ocr.py) | PaddleOCR GPU 加速图片文字提取：`ocr_images(urls)` 并行下载+识别 → 拼接文本；懒加载模型；GPU 失败自动回退 CPU；依赖缺失时 `is_available()` → False |
 | [push_feishu.py](push_feishu.py) | Markdown 简报渲染 + lark-cli 发送（长文本走临时文件 + `$(cat)`；LLM 命中帖子追加匹配理由） |
 | [config.py](config.py) | 全局配置：路径/选择器/浏览器/header/LLM 端点；跨平台浏览器检测（Win/Linux） |
 | [save_cookies.py](save_cookies.py) | 有头浏览器手动登录保存 Cookie 到 `cookies/xhs_cookies.json` |
@@ -128,3 +132,5 @@ journalctl --user -u xhs-monitor-bot.service -f    # 实时日志
 | Pipeline timeout | 网络/反爬 | 单独 `manage.py run --keyword "测试" --max 3` 重试 |
 | 小红书改版 | DOM 选择器失效 | 更新 [config.py:60-66](config.py#L60-L66) `SELECTORS` |
 | `lark-cli: command not found` | 子进程 PATH 不全 | 确认 systemd service unit 显式设置 `Environment=PATH=...` |
+| OCR 报 CUDA/cuDNN 错误 | LD_LIBRARY_PATH 未设置 | `manage.py _build_subprocess_env()` 自动注入；systemd unit 需配 `Environment=LD_LIBRARY_PATH=...` |
+| OCR 无 GPU 加速 | paddlepaddle-gpu 未装或 cuDNN 版本不匹配 | 确认 cuDNN 8.6 软链存在；检查 `python -c "import paddle; print(paddle.device.is_compiled_with_cuda())"` |

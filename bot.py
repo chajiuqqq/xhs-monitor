@@ -555,9 +555,11 @@ def _cmd_run(args, sender_id, chat_id):
         manage_cmd += ["--task", select_task]
 
     # 异步启动 pipeline（不阻塞事件循环）
+    # 复用 manage._build_subprocess_env 注入 PATH + LD_LIBRARY_PATH（OCR GPU 依赖）
+    from manage import _build_subprocess_env
     subprocess.Popen(
         manage_cmd,
-        env={**os.environ, "PYTHONUTF8": "1"},
+        env=_build_subprocess_env(),
         cwd=str(PROJECT_ROOT),
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,

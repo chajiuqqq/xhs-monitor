@@ -60,6 +60,8 @@ def build_markdown(result: dict) -> str:
         tags = note.get("tags", [])
         kw = note.get("keyword", "")
         llm_reason = note.get("llm_match_reason", "")
+        summary = note.get("summary", "")
+        ocr_text = note.get("ocr_text", "")
 
         # 截断正文（飞书消息不宜过长）
         desc_short = desc[:200] + "..." if len(desc) > 200 else desc
@@ -70,8 +72,15 @@ def build_markdown(result: dict) -> str:
 
         lines.append(f"### {i}. {title}")
         lines.append(f"作者: {author} | 点赞: {likes} | 图片: {img_count}张 | 关键词: {kw}")
-        if desc_short:
+        # 摘要优先（LLM 生成），无则降级用 desc 截断
+        if summary:
+            lines.append(f"📝 摘要: {summary}")
+        elif desc_short:
             lines.append(f"摘要: {desc_short}")
+        if ocr_text:
+            ocr_show = ocr_text[:200].replace("\n", " ")
+            suffix = "..." if len(ocr_text) > 200 else ""
+            lines.append(f"📷 图片文字: {ocr_show}{suffix}")
         if tag_str:
             lines.append(f"标签: {tag_str}")
         if llm_reason:
