@@ -53,6 +53,7 @@ else:
 SCROLL_TIMES = 3          # 搜索结果页滚动次数（每次加载更多瀑布流）
 SCROLL_WAIT_MS = 2000     # 每次滚动后等待渲染的毫秒数
 PAGE_LOAD_WAIT_MS = 3000  # 搜索页首次加载后等待时间
+PAGE_GOTO_TIMEOUT_MS = 30000  # 页面 goto 超时（毫秒），networkidle 可能因图片/视频加载慢而超时
 MAX_RESULTS_DEFAULT = 10  # 每个关键词默认最大抓取数
 
 # ── 搜索结果页 DOM 选择器（如小红书改版需调整此处）─────────

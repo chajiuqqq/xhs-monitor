@@ -22,6 +22,7 @@ from config import (
     COOKIE_PATH,
     HEADERS,
     MAX_RESULTS_DEFAULT,
+    PAGE_GOTO_TIMEOUT_MS,
     PAGE_LOAD_WAIT_MS,
     SCROLL_TIMES,
     SCROLL_WAIT_MS,
@@ -80,8 +81,17 @@ async def _search_page(context, keyword: str, max_results: int) -> list[dict]:
     search_url = XHS_SEARCH_URL.format(keyword=quote(keyword))
     page = await context.new_page()
 
-    await page.goto(search_url, wait_until="networkidle")
+    # 用 domcontentloaded 而不是 networkidle：网络空闲等待会被图片/视频拖慢
+    # 改为 DOM 解析完即可（小红书搜索结果 DOM 一次性渲染，后续滚动加载更多）
+    await page.goto(search_url, wait_until="domcontentloaded", timeout=PAGE_GOTO_TIMEOUT_MS)
     await page.wait_for_timeout(PAGE_LOAD_WAIT_MS)
+
+    # 等待搜索结果 DOM 出现（确保 SSR 数据已挂载）
+    try:
+        await page.wait_for_selector(SELECTORS["note_card"], timeout=15000)
+    except Exception:
+        # 选择器没出现，可能是反爬或风控，等待后再试一次
+        await page.wait_for_timeout(3000)
 
     # 滚动加载更多瀑布流
     for _ in range(SCROLL_TIMES):

@@ -43,6 +43,31 @@ else:
     PYTHON = _VENV_PYTHON if Path(_VENV_PYTHON).exists() else sys.executable
 
 
+def _build_subprocess_env() -> dict:
+    """构建 subprocess 环境变量。
+
+    关键点：subprocess 会继承当前进程的环境，但如果当前进程 PATH 不全
+    （如 systemd --user / nohup 启动时只含 /usr/bin:/bin），子进程也找不到
+    lark-cli。这里强制注入常用路径，覆盖各场景。
+    """
+    import os
+    env = os.environ.copy()
+    if sys.platform != "win32":
+        # Linux: 补全 lark-cli / node / chromium / playwright 的查找路径
+        extra_paths = [
+            str(Path.home() / ".npm-global" / "bin"),  # npm 全局安装（lark-cli）
+            str(Path.home() / ".local" / "bin"),        # pip --user 安装
+            str(Path.home() / "xhs_monitor" / "venv" / "bin"),  # 项目 venv（如果有）
+            "/usr/local/bin",
+            "/snap/bin",                                # snap chromium
+        ]
+        # 保留原 PATH 前缀，再加上补充路径
+        env["PATH"] = ":".join(extra_paths) + ":" + env.get("PATH", "")
+    env["PYTHONUTF8"] = "1"
+    env["PYTHONUNBUFFERED"] = "1"
+    return env
+
+
 # ──────────────────────────────────────────────────────
 # 任务持久化
 # ──────────────────────────────────────────────────────
@@ -194,7 +219,7 @@ def cmd_run(args):
     result = subprocess.run(
         [PYTHON, pipeline_script, kw_json, "--max", str(max_results)],
         capture_output=False,  # 直接输出到控制台
-        env={**__import__("os").environ, "PYTHONUTF8": "1", "PYTHONUNBUFFERED": "1"},
+        env=_build_subprocess_env(),
         cwd=str(PROJECT_ROOT),
         timeout=600,  # 10 分钟超时
     )
@@ -234,7 +259,7 @@ def cmd_run(args):
     print("[推送] 发送飞书通知...")
     subprocess.run(
         push_cmd,
-        env={**__import__("os").environ, "PYTHONUTF8": "1"},
+        env=_build_subprocess_env(),
         cwd=str(PROJECT_ROOT),
     )
 
